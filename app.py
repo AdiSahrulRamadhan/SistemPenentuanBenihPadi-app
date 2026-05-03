@@ -918,7 +918,7 @@ Membandingkan kriteria secara berpasangan.
     """)
         if "ahp_matrix" not in st.session_state or st.session_state.ahp_matrix is None:
             st.session_state.ahp_matrix = pd.DataFrame(
-                [[1.0]*n for _ in range(n)],
+                [[1.0]*n for _ in range(n)],    
                 columns=kriteria,
                 index=kriteria
             )
@@ -970,13 +970,15 @@ Membandingkan kriteria secara berpasangan.
                     matrix.iloc[j, i] = 1 / val
 
                 elif i > j:
-                    # 🔥 ambil nilai asli sebelum diedit
+                    # 🔥 abaikan nilai default 1 dari streamlit
                     val_input = edited.iloc[i, j]
-                    val_expected = matrix.iloc[i, j]  # hasil reciprocal
+                    val_expected = matrix.iloc[i, j]
 
-                    if not pd.isna(val_input) and abs(val_input - val_expected) > 1e-6:
-                        st.error(f"❌ Jangan isi bagian bawah diagonal: {kriteria[i]} vs {kriteria[j]} isi hanya bagian atas saja! dan pastikan nilai diagonal bawah tetap None atau kosong")
-                        error_flag = True
+                    # hanya anggap error kalau user benar-benar ubah jauh dari reciprocal
+                    if not pd.isna(val_input) and val_input != 1:
+                        if abs(val_input - val_expected) > 1e-6:
+                            st.error(f"❌ Jangan isi bagian bawah diagonal: {kriteria[i]} vs {kriteria[j]} isi hanya bagian atas saja!")
+                            error_flag = True
 
         # =========================
         # 🔥 TAMPILKAN MATRKS FINAL
