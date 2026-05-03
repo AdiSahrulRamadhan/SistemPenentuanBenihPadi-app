@@ -131,7 +131,7 @@ st.session_state.menu = selected
 # =========================
 # LOAD DATA DARI DATABASE
 # =========================
-data_db = load_db("data")
+data_db = load_db("data_awal")
 
 if data_db:
     try:
@@ -191,37 +191,79 @@ Mendukung CSV & Excel dan auto separator.
 
     if file is not None:
 
-        # =========================
-        # LOAD FILE
-        # =========================
-        if file.name.endswith(".csv"):
-            df = load_data(file)
-        else:
-            df = pd.read_excel(file)
+        try:
+            # =========================
+            # VALIDASI NAMA FILE
+            # =========================
+            if not (file.name.endswith(".csv") or file.name.endswith(".xlsx")):
+                st.error("❌ Format file tidak didukung! Gunakan CSV atau Excel (.xlsx)")
+                st.stop()
 
-        # =========================
-        # SIMPAN KE DATABASE
-        # =========================
-        save_db("data", df.to_dict())
-        save_db("filename", file.name)
+            # =========================
+            # LOAD FILE
+            # =========================
+            try:
+                if file.name.endswith(".csv"):
+                    df = load_data(file)
+                else:
+                    df = pd.read_excel(file)
+            except Exception:
+                notif = st.empty()
+                notif.error("❌ File gagal dibaca! Pastikan format benar.")
+                time.sleep(4)
+                notif.empty()
+                st.stop()
 
-        # =========================
-        # UPDATE SESSION
-        # =========================
-        st.session_state.data = df
+            # =========================
+            # VALIDASI DATA KOSONG
+            # =========================
+            if df is None or df.empty:
+                notif = st.empty()
+                notif.warning("⚠️ File kosong!")
+                time.sleep(4)
+                notif.empty()
+                st.stop()
 
-        st.success("Upload berhasil!")
+            # =========================
+            # VALIDASI KOLOM MINIMAL
+            # =========================
+            if df.shape[1] < 2:
+                st.error("❌ Data minimal harus memiliki 2 kolom!")
+                st.stop()
 
-        # =========================
-        # RESET SEMUA DATA TURUNAN
-        # =========================
-        save_db("preprocess", None)
-        save_db("config", None)
-        save_db("bobot", None)
-        save_db("skenario", None)
+            # =========================
+            # SIMPAN KE DATABASE
+            # =========================
+            save_db("data_awal", df.to_dict())
+            save_db("filename", file.name)
 
-        st.session_state.pop("data_preprocessed", None)
-        st.session_state.pop("skenario_list", None)
+            # =========================
+            # UPDATE SESSION
+            # =========================
+            st.session_state.data = df
+
+            # =========================
+            # RESET DATA TURUNAN
+            # =========================
+            save_db("preprocess", None)
+            save_db("config", None)
+            save_db("bobot", None)
+            save_db("skenario", None)
+
+            st.session_state.pop("data_preprocessed", None)
+            st.session_state.pop("skenario_list", None)
+            st.session_state.pop("data_edit", None)
+
+            # =========================
+            # NOTIFIKASI SUKSES
+            # =========================
+            notif = st.empty()
+            notif.success("✅ Upload berhasil! Data siap diproses.")
+            time.sleep(4)
+            notif.empty()
+
+        except Exception as e:
+            st.error(f"❌ Terjadi kesalahan saat upload: {e}")
 
     # =========================
     # TAMPILKAN DATA
@@ -250,7 +292,7 @@ Mendukung CSV & Excel dan auto separator.
         colA,colB,colC = st.columns([6,1,2])
         with colC:
             st.markdown('<div class="blue-btn">', unsafe_allow_html=True)
-            if st.button("➡️ Proses Preprocessing Data"):
+            if st.button("➡️ Preprocessing Data"):
                 st.session_state.menu = "Preprocessing"
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
@@ -289,139 +331,170 @@ elif selected == "Preprocessing":
             df = pd.DataFrame(data_db)
             st.session_state.data = df
         else:
-            df = st.session_state.data
+            st.warning("⚠️ Data belum tersedia, silakan upload dulu")
 
         # =========================
-        # 🔥 DATA AWAL + TAMBAH VARIABEL
+        # 🔥 DATA AWAL (FULL EDIT MODE)
         # =========================
-        st.subheader("📊 Data Awal & Tambah Variabel")
+        st.subheader("📊 Data Awal")
 
         st.markdown("""
-        **Penjelasan:**
-        Bagian ini digunakan untuk:
-        - Melihat data awal
-        - Menambahkan variabel (kolom baru)
-        - Mengisi nilai data secara langsung
+        ### 📝 Penjelasan:
+        Data dapat diedit langsung pada tabel seperti Excel.
 
-        **Tujuan:**
-        Mempermudah penyesuaian dataset tanpa upload ulang.
+        ### Fitur:
+        - Edit semua nilai (numerik / string)
+        - Tambah baris otomatis
+        - Tambah variabel (kolom)
+        - Simpan perubahan ke database
 
-        **Contoh:**
-        Menambah kolom "Harga" lalu isi nilai untuk semua alternatif.
+        ### Ketentuan:
+        - Data tidak boleh kosong
+        - Kolom tidak boleh duplikat
+        - Jika numerik kosong → otomatis 0
+        - Jika string kosong → tetap kosong ("")
+        - Jumlah data mengikuti dataset utama
         """)
 
         # =========================
-        # 🔥 LOAD DATA TERBARU DARI DB
+        # LOAD DATA TERBARU
         # =========================
         data_db = load_db("data_awal")
+
         if data_db:
             df = pd.DataFrame(data_db)
             st.session_state.data = df
-
-        # tampilkan data awal
-        st.dataframe(df, use_container_width=True)
+        else:
+            df = st.session_state.data
 
         # =========================
-        # INPUT NAMA VARIABEL BARU
+        # INIT SESSION EDIT
         # =========================
-        st.markdown("### ➕ Tambah Variabel Baru")
+        if "data_edit" not in st.session_state:
+            st.session_state.data_edit = df.copy()
+
+        # =========================
+        # 🔥 TABEL EDIT UTAMA
+        # =========================
+        df_edit = st.data_editor(
+            st.session_state.data_edit,
+            use_container_width=True,
+            num_rows="dynamic",  # bisa tambah row
+            key="main_editor"
+        )
+
+        # simpan ke session
+        st.session_state.data_edit = df_edit
+
+        # =========================
+        # 🔥 INFO DATA
+        # =========================
+        col1, col2 = st.columns(2)
+        col1.info(f"Jumlah Baris: {df_edit.shape[0]}")
+        col2.info(f"Jumlah Kolom: {df_edit.shape[1]}")
+
+        # =========================
+        # 🔥 TOMBOL SIMPAN (POSISI DI SINI SESUAI PERMINTAAN)
+        # =========================
+        st.markdown("""
+        **Penjelasan:**
+        Klik tombol ini untuk menyimpan semua perubahan pada tabel.
+
+        **Kondisi:**
+        - Semua perubahan akan menggantikan data lama
+        - Data akan disimpan ke database
+        - Pastikan tidak ada error sebelum menyimpan
+        """)
+
+        if st.button("💾 Simpan Perubahan Data"):
+
+            try:
+                df_save = st.session_state.data_edit.copy()
+
+                # =========================
+                # VALIDASI
+                # =========================
+                if df_save.empty:
+                    st.error("❌ Data tidak boleh kosong!")
+                    st.stop()
+
+                # cek kolom duplikat
+                if df_save.columns.duplicated().any():
+                    st.error("❌ Terdapat nama kolom duplikat!")
+                    st.stop()
+
+                # =========================
+                # HANDLE DATA KOSONG
+                # =========================
+                for col in df_save.columns:
+
+                    if df_save[col].dtype == object:
+                        df_save[col] = df_save[col].fillna("")
+                    else:
+                        df_save[col] = pd.to_numeric(df_save[col], errors='coerce').fillna(0)
+
+                # =========================
+                # SIMPAN KE DB
+                # =========================
+                save_db("data_awal", df_save.to_dict())
+
+                st.session_state.data = df_save
+
+                notif = st.empty()
+                notif.success("✅ Perubahan data berhasil disimpan!")
+
+                time.sleep(3)
+                notif.empty()
+
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
+
+        # =========================
+        # 🔥 TAMBAH VARIABEL (SETELAH SIMPAN)
+        # =========================
+        st.markdown("---")
+        st.subheader("➕ Tambah Variabel Baru")
+
+        st.markdown("""
+        **Penjelasan:**
+        Menambahkan kolom baru ke dataset.
+
+        **Kondisi:**
+        - Nama variabel harus unik
+        - Nilai default akan diisi otomatis
+        """)
 
         col1, col2 = st.columns(2)
 
         nama_kolom = col1.text_input("Nama Variabel Baru")
+        tipe_data = col2.selectbox("Tipe Data", ["Numerik", "String"])
 
-        tipe_data = col2.selectbox(
-            "Tipe Data",
-            ["Numerik", "Teks"]
-        )
-
-        # =========================
-        # 🔥 STATE TAMBAHAN (TRIGGER)
-        # =========================
-        if "trigger_tambah_var" not in st.session_state:
-            st.session_state.trigger_tambah_var = False
-
-        # =========================
-        # 🔥 TOMBOL TAMBAHKAN VARIABEL
-        # =========================
-        if st.button("➕ Tambahkan Variabel"):
+        if st.button("➕ Tambahkan Kolom"):
 
             if not nama_kolom:
                 st.error("❌ Nama variabel harus diisi!")
             else:
-                st.session_state.trigger_tambah_var = True
-                st.session_state.nama_kolom_temp = nama_kolom
-                st.session_state.tipe_data_temp = tipe_data
+                df_temp = st.session_state.data_edit
 
-        # =========================
-        # BUAT TABEL INPUT (HANYA JIKA DIKLIK)
-        # =========================
-        if st.session_state.get("trigger_tambah_var"):
-
-            # 🔥 ambil dari session (biar tidak hilang saat rerun)
-            nama_kolom = st.session_state.nama_kolom_temp
-            tipe_data = st.session_state.tipe_data_temp
-
-            st.markdown("### ✏️ Input Nilai Data")
-
-            # buat template sesuai jumlah row
-            if tipe_data == "Numerik":
-                default_val = 0.0
-            else:
-                default_val = ""
-
-            df_input = pd.DataFrame({
-                "Alternatif": df.iloc[:,0],
-                nama_kolom: [None]*len(df)  # 🔥 kosong boleh
-            })
-
-            df_input = st.data_editor(
-                df_input,
-                use_container_width=True,
-                key=f"input_{nama_kolom}"
-            )
-
-            # =========================
-            # SIMPAN
-            # =========================
-            if st.button("💾 Simpan Variabel Baru"):
-
-                try:
-                    data_db = load_db("data_awal") or df.to_dict()
-                    df_db = pd.DataFrame(data_db)
-
-                    # validasi nama kolom
-                    if nama_kolom in df_db.columns:
-                        st.error("❌ Nama variabel sudah ada!")
-                        st.stop()
-
-                    # 🔥 HANDLE NILAI KOSONG
+                if nama_kolom in df_temp.columns:
+                    st.error("❌ Kolom sudah ada!")
+                else:
                     if tipe_data == "Numerik":
-                        nilai_bersih = pd.to_numeric(
-                            df_input[nama_kolom],
-                            errors='coerce'
-                        ).fillna(0)
+                        df_temp[nama_kolom] = 0
                     else:
-                        nilai_bersih = df_input[nama_kolom].fillna("")
+                        df_temp[nama_kolom] = ""
 
-                    # tambah kolom baru
-                    df_db[nama_kolom] = nilai_bersih.values
+                    st.session_state.data_edit = df_temp
 
-                    # simpan ke DB
-                    save_db("data_awal", df_db.to_dict())
+                    notif = st.empty()
+                    notif.success("✅ Kolom berhasil ditambahkan!")
 
-                    # update session
-                    st.session_state.data = df_db
-
-                    # 🔥 reset trigger
-                    st.session_state.trigger_tambah_var = False
-
-                    st.success("✅ Variabel berhasil ditambahkan!")
+                    time.sleep(2)
+                    notif.empty()
 
                     st.rerun()
-
-                except Exception as e:
-                    st.error(f"❌ Error: {e}")  
 
         # =========================
         # 1️⃣ HAPUS FITUR
@@ -715,7 +788,7 @@ elif selected == "Pembobotan":
         config_db = load_db("config") or {}
         bobot_db = load_db("bobot") or {}
 
-        if "ahp_matrix" in config_db:
+        if "ahp_matrix" in config_db and "ahp_matrix" not in st.session_state:
             st.session_state.ahp_matrix = pd.DataFrame(config_db["ahp_matrix"])
             st.session_state.ahp_matrix = st.session_state.ahp_matrix.reindex(index=kriteria, columns=kriteria)
 
@@ -789,20 +862,27 @@ Membandingkan kriteria secara berpasangan.
         st.latex(r"A = [a_{ij}]")
 
         st.markdown("""
-**Penjelasan:**
-Matriks ini berisi perbandingan antar kriteria.
+    **Penjelasan:**
+    Matriks ini adalah hasil akhir dari input pengguna yang telah diperbaiki secara otomatis.
 
-**Variabel:**
-- $a_{ij}$ = tingkat kepentingan kriteria i terhadap j
+    **Aturan AHP yang diterapkan:**
+    - Diagonal (C1 vs C1) = 1 → karena membandingkan dirinya sendiri
+    - Hanya bagian atas diagonal yang diinput oleh user
+    - Bagian bawah diagonal dihitung otomatis sebagai kebalikan (reciprocal)
 
-**Contoh:**
-Jika:
-C1 dibanding C2 = 3  
+    **Rumus:**
+    Jika:
+    aᵢⱼ = x  
+    maka:
+    aⱼᵢ = 1 / x  
 
-Maka:
-C2 dibanding C1 = 1/3 = 0.333
-""")
+    **Contoh:**
+    Jika:
+    C1 dibanding C2 = 3  
 
+    Maka:
+    C2 dibanding C1 = 1/3 = 0.333
+    """)
         if "ahp_matrix" not in st.session_state or st.session_state.ahp_matrix is None:
             st.session_state.ahp_matrix = pd.DataFrame(
                 [[1.0]*n for _ in range(n)],
@@ -810,12 +890,71 @@ C2 dibanding C1 = 1/3 = 0.333
                 index=kriteria
             )
 
-        matrix = st.data_editor(
+        edited = st.data_editor(
             st.session_state.ahp_matrix,
-            use_container_width=True
-        ).astype(float)
+            use_container_width=True,
+            key="ahp_editor"
+        )
 
-        st.session_state.ahp_matrix = matrix
+        # 🔥 FIX: pastikan DataFrame
+        if isinstance(edited, dict):
+            edited = pd.DataFrame(edited)
+
+        edited = edited.astype(float)
+
+        matrix = edited.copy()
+        error_flag = False
+
+        for i in range(n):
+            for j in range(n):
+
+                if i == j:
+                    val = edited.iloc[i, j]
+
+                    # ❌ jika user ubah diagonal
+                    if not pd.isna(val) and val != 1:
+                        st.error(f"❌ {kriteria[i]} dibanding {kriteria[j]} harus bernilai 1 (kriteria yang sama)")
+                        error_flag = True
+
+                    # 🔒 tetap paksa jadi 1
+                    matrix.iloc[i, j] = 1.0
+
+                elif i < j:
+                    # ✔ hanya bagian atas boleh diisi
+                    val = matrix.iloc[i, j]
+
+                    if pd.isna(val) or val == 0 or val == "":
+                        val = 1.0
+
+                    try:
+                        val = float(val)
+                    except:
+                        st.error(f"❌ Nilai tidak valid pada {kriteria[i]} vs {kriteria[j]}")
+                        error_flag = True
+                        continue
+
+                    matrix.iloc[i, j] = val
+                    matrix.iloc[j, i] = 1 / val
+
+                elif i > j:
+                    # 🔥 ambil nilai asli sebelum diedit
+                    val_input = edited.iloc[i, j]
+                    val_expected = matrix.iloc[i, j]  # hasil reciprocal
+
+                    if not pd.isna(val_input) and abs(val_input - val_expected) > 1e-6:
+                        st.error(f"❌ Jangan isi bagian bawah diagonal: {kriteria[i]} vs {kriteria[j]} isi hanya bagian atas saja! dan pastikan nilai diagonal bawah tetap None atau kosong")
+                        error_flag = True
+
+        # =========================
+        # 🔥 TAMPILKAN MATRKS FINAL
+        # =========================
+        if not error_flag:
+            st.session_state.ahp_matrix = matrix
+            st.subheader("📊 Matriks Perbandingan Final (Otomatis)")
+            st.dataframe(matrix, use_container_width=True)
+            st.success("✅ Matriks sudah otomatis konsisten secara struktur (reciprocal)")
+        else:
+            st.warning("⚠️ Perbaiki input terlebih dahulu")
 
         # =========================
         # 2️⃣ JUMLAH KOLOM
@@ -1322,7 +1461,7 @@ elif selected == "Perangkingan":
     if df is None:
         st.warning("Data belum ada")
     elif bobot is None:
-        st.warning("Bobot AHP belum tersedia")
+        st.warning("Bobot AHP & Fuzzy AHP belum tersedia")
     else:
 
         alternatif = df.iloc[:, 0]
