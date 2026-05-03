@@ -1906,35 +1906,6 @@ A1 = 0.8 dan 0.9
             save_db("ranking_fuzzy", df_rank.to_dict())
 
             # =========================
-            # 🔥 SKENARIO (DINAMIS)
-            # =========================
-            st.markdown("---")
-            st.header("🎯 Skenario Bobot & Perangkingan")
-
-            st.markdown("""
-            **Penjelasan:**
-            Skenario digunakan untuk menguji sensitivitas perubahan bobot terhadap hasil perangkingan.
-
-            **Tujuan:**
-            Mengetahui apakah perubahan kecil pada bobot dapat mempengaruhi hasil akhir.
-
-            **Cara kerja:**
-            1. Pilih metode bobot (AHP / Fuzzy AHP)
-            2. Ubah bobot (tukar / rotasi / manual)
-            3. Sistem menghitung ulang TOPSIS
-            4. Hasil dibandingkan dengan kondisi awal
-
-            **Contoh:**
-            Jika bobot awal:
-            C1 = 0.4, C2 = 0.3  
-
-            Ditukar:
-            C1 = 0.3, C2 = 0.4  
-
-            → hasil ranking bisa berubah
-            """)
-
-            # =========================
             # PILIH METODE
             # =========================
             metode_skenario = st.selectbox(
@@ -1947,220 +1918,184 @@ A1 = 0.8 dan 0.9
             else:
                 bobot_awal = st.session_state.get("bobot_fuzzy")
 
-            if bobot_awal is None:
-                st.warning("Bobot belum tersedia")
-            else:
+            df_pre = st.session_state.get("data_preprocessed")
 
-                # =========================
-                # INPUT BOBOT
-                # =========================
-                st.subheader("🔧 Input / Edit Bobot Skenario")
+            if bobot_awal is None or df_pre is None:
+                st.warning("Bobot / Data belum tersedia")
+                st.stop()
 
-                st.markdown("""
-            **Penjelasan:**
-            Bobot dapat diubah secara manual.
+            alternatif = df_pre.iloc[:, 0]
+            X = df_pre.iloc[:, 1:]
 
-            **Tujuan:**
-            Membuat berbagai variasi skenario.
+            # =========================
+            # INPUT BOBOT (EDITABLE)
+            # =========================
+            st.subheader("🔧 Input / Edit Bobot Skenario")
 
-            **Contoh:**
-            - Tukar ranking ke-6 dan ke-7  
-            - Rotasi bobot  
-            - Ubah manual nilai bobot
-            """)
+            df_bobot = pd.DataFrame({
+                "Kriteria": bobot_awal.index,
+                "Bobot": bobot_awal.values
+            }).sort_values(by="Bobot", ascending=False).reset_index(drop=True)
 
-                df_bobot = pd.DataFrame({
-                    "Kriteria": bobot_awal.index,
-                    "Bobot": bobot_awal.values
-                }).sort_values(by="Bobot", ascending=False).reset_index(drop=True)
+            df_bobot["Ranking"] = df_bobot.index + 1
 
-                df_bobot["Ranking"] = df_bobot.index + 1
+            edited = st.data_editor(df_bobot, use_container_width=True)
 
-                edited = st.data_editor(df_bobot, use_container_width=True)
+            # =========================
+            # AMBIL BOBOT
+            # =========================
+            bobot_skenario = pd.Series(
+                edited["Bobot"].values,
+                index=edited["Kriteria"]
+            )
 
-                # =========================
-                # AMBIL BOBOT
-                # =========================
-                bobot_skenario = pd.Series(
-                    edited["Bobot"].values,
-                    index=edited["Kriteria"]
-                )
+            # 🔥 FIX: SAMAKAN URUTAN KOLOM
+            bobot_skenario = bobot_skenario.reindex(X.columns).fillna(0)
 
-                bobot_skenario = bobot_skenario.reindex(X.columns)
+            # 🔥 NORMALISASI OTOMATIS
+            if bobot_skenario.sum() != 0:
+                bobot_skenario = bobot_skenario / bobot_skenario.sum()
 
-                # =========================
-                # HITUNG ULANG TOPSIS
-                # =========================
-                st.subheader("📊 Perhitungan TOPSIS Skenario")
+            # =========================
+            # 🔥 TOPSIS BENAR (PER KOLOM)
+            # =========================
+            st.subheader("📊 Perhitungan TOPSIS Skenario")
 
-                st.markdown("""
-            **Penjelasan:**
-            Menggunakan langkah TOPSIS yang sama, tetapi dengan bobot skenario.
+            # 1 Normalisasi
+            pembagi = np.sqrt((X**2).sum(axis=0))
+            R_s = X / pembagi
 
-            **Tahapan:**
-            1. Normalisasi
-            2. Pembobotan
-            3. Solusi ideal
-            4. Jarak
-            5. Preferensi
-            """)
+            # 2 Terbobot
+            Y_s = R_s * bobot_skenario.values
 
-                # 1 Normalisasi
-                pembagi = (X**2).sum()**0.5
-                R_s = X / pembagi
+            # 3 Solusi ideal
+            A_plus_s = Y_s.max(axis=0)
+            A_minus_s = Y_s.min(axis=0)
 
-                # 2 Terbobot
-                Y_s = R_s * bobot_skenario.values
+            # 4 Jarak
+            D_plus_s = np.sqrt(((Y_s - A_plus_s)**2).sum(axis=1))
+            D_minus_s = np.sqrt(((Y_s - A_minus_s)**2).sum(axis=1))
 
-                # 3 Solusi ideal
-                A_plus_s = Y_s.max()
-                A_minus_s = Y_s.min()
+            # 5 Preferensi
+            V_s = D_minus_s / (D_plus_s + D_minus_s)
 
-                # 4 Jarak
-                D_plus_s = ((Y_s - A_plus_s)**2).sum(axis=1)**0.5
-                D_minus_s = ((Y_s - A_minus_s)**2).sum(axis=1)**0.5
+            # =========================
+            # HASIL
+            # =========================
+            st.subheader("📊 Hasil Ranking Skenario")
 
-                # 5 Preferensi
-                V_s = D_minus_s / (D_plus_s + D_minus_s)
+            df_skenario = pd.DataFrame({
+                "Alternatif": alternatif,
+                "Preferensi": V_s
+            })
 
-                # =========================
-                # HASIL
-                # =========================
-                st.subheader("📊 Hasil Ranking Skenario")
+            # 🔥 FIX: RATA-RATA
+            df_skenario = df_skenario.groupby("Alternatif", as_index=False).mean()
 
-                df_skenario = pd.DataFrame({
-                    "Alternatif": alternatif,
-                    "Preferensi": V_s
+            df_skenario = df_skenario.sort_values(
+                by="Preferensi",
+                ascending=False
+            ).reset_index(drop=True)
+
+            df_skenario["Ranking"] = df_skenario.index + 1
+
+            # 🔥 OPTIONAL: BIAR RAPI
+            df_skenario["Preferensi"] = df_skenario["Preferensi"].round(4)
+
+            st.dataframe(df_skenario, use_container_width=True)
+
+            st.success(f"🏆 Terbaik: {df_skenario.iloc[0]['Alternatif']}")
+
+            # =========================
+            # SIMPAN SKENARIO
+            # =========================
+            st.subheader("💾 Simpan Skenario")
+
+            skenario_db = load_db("skenario") or []
+
+            next_number = len(skenario_db) + 1
+            default_nama = f"Skenario {next_number}"
+
+            nama_skenario = st.text_input(
+                "Nama Skenario",
+                value=default_nama
+            )
+
+            # cek duplikat
+            nama_list = [s["nama"] for s in skenario_db]
+
+            if nama_skenario in nama_list:
+                st.error("❌ Nama skenario sudah ada!")
+                st.stop()
+
+            if st.button("💾 Simpan Skenario"):
+
+                df_save = df_skenario.copy()
+
+                skenario_db.append({
+                    "nama": nama_skenario,
+                    "metode": metode_skenario,
+                    "bobot": bobot_skenario.to_dict(),
+                    "ranking": df_save.to_dict(orient="records")
                 })
 
-                df_skenario = df_skenario.groupby("Alternatif", as_index=False).mean()
-                df_skenario = df_skenario.sort_values(by="Preferensi", ascending=False).reset_index(drop=True)
-                df_skenario["Ranking"] = df_skenario.index + 1
+                save_db("skenario", skenario_db)
 
-                st.dataframe(df_skenario)
+                st.success(f"✅ {nama_skenario} berhasil disimpan!")
+                st.rerun()
 
-                st.success(f"🏆 Terbaik: {df_skenario.iloc[0]['Alternatif']}")
+            # =========================
+            # LIST SKENARIO
+            # =========================
+            st.subheader("📂 Daftar Skenario")
 
-                # =========================
-                # SIMPAN SKENARIO (DB)
-                # =========================
-                st.subheader("💾 Simpan Skenario")
+            if skenario_db:
 
-                st.markdown("""
-            **Penjelasan:**
-            Skenario disimpan untuk evaluasi menggunakan:
-            - Spearman Rank
-            - NDCG
+                for sk in skenario_db:
+                    with st.expander(f"{sk['nama']} ({sk['metode']})"):
 
-            Setiap skenario menyimpan:
-            - Nama
-            - Metode
-            - Bobot
-            - Ranking hasil
-            """)
+                        st.write("Bobot:")
+                        st.dataframe(pd.DataFrame(
+                            sk["bobot"].items(),
+                            columns=["Kriteria", "Bobot"]
+                        ))
 
-                # =========================
-                # AUTO NAMA SKENARIO
-                # =========================
-                skenario_db = load_db("skenario") or []
+                        st.write("Ranking:")
+                        st.dataframe(pd.DataFrame(sk["ranking"]))
 
-                next_number = len(skenario_db) + 1
-                default_nama = f"Skenario {next_number}"
+            else:
+                st.info("Belum ada skenario")
 
-                nama_skenario = st.text_input(
-                    "Nama Skenario",
-                    value=default_nama
-                )
-                # cek duplikat
-                nama_list = [s["nama"] for s in skenario_db]
+            # =========================
+            # HAPUS SEMUA
+            # =========================
+            st.markdown("---")
+            st.subheader("🗑️ Hapus Semua Skenario")
 
-                if nama_skenario in nama_list:
-                    st.error("❌ Nama skenario sudah ada!")
-                    st.stop()
+            col1, col2 = st.columns(2)
 
-                if st.button("💾 Simpan Skenario"):
+            with col1:
+                if st.button("🗑️ Hapus Semua Skenario"):
+                    st.session_state.confirm_delete = True
 
-                    skenario_db = load_db("skenario") or []
+            with col2:
+                if st.session_state.get("confirm_delete"):
+                    if st.button("⚠️ Yakin Hapus Semua?"):
 
-                    skenario_db.append({
-                        "nama": nama_skenario,
-                        "metode": metode_skenario,
-                        "bobot": bobot_skenario.to_dict(),
-                        "ranking": df_skenario.to_dict()
-                    })
+                        save_db("skenario", [])
+                        st.session_state.confirm_delete = False
 
-                    save_db("skenario", skenario_db)
+                        st.success("✅ Semua skenario berhasil dihapus!")
+                        st.rerun()
 
-                    st.success(f"✅ {nama_skenario} berhasil disimpan!")
+            # =========================
+            # LANJUT
+            # =========================
+            st.markdown("---")
 
-                # =========================
-                # LIST SKENARIO
-                # =========================
-                st.subheader("📂 Daftar Skenario")
-
-                skenario_db = load_db("skenario") or []
-
-                if skenario_db:
-
-                    for sk in skenario_db:
-
-                        with st.expander(f"{sk['nama']} ({sk['metode']})"):
-
-                            st.write("Bobot:")
-                            st.dataframe(pd.DataFrame(sk["bobot"].items(), columns=["Kriteria","Bobot"]))
-
-                            st.write("Ranking:")
-                            st.dataframe(pd.DataFrame(sk["ranking"]))
-
-                else:
-                    st.info("Belum ada skenario")
-
-                # =========================
-                # 🗑️ HAPUS SEMUA SKENARIO
-                # =========================
-                st.markdown("---")
-                st.subheader("🗑️ Hapus Semua Skenario")
-
-                st.markdown("""
-                **Penjelasan:**
-                Fitur ini digunakan untuk menghapus seluruh skenario yang telah disimpan di database.
-
-                **Catatan:**
-                Aksi ini tidak dapat dibatalkan.
-                """)
-
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    if st.button("🗑️ Hapus Semua Skenario"):
-
-                        # konfirmasi manual sederhana
-                        st.session_state.confirm_delete = True
-
-                with col2:
-                    if st.session_state.get("confirm_delete"):
-
-                        if st.button("⚠️ Yakin Hapus Semua?"):
-
-                            # 🔥 HAPUS DB
-                            save_db("skenario", [])
-
-                            # 🔥 RESET SESSION
-                            st.session_state.confirm_delete = False
-
-                            st.success("✅ Semua skenario berhasil dihapus!")
-
-                            # refresh biar langsung kosong
-                            st.rerun()
-
-                # =========================
-                # LANJUT
-                # =========================
-                st.markdown("---")
-
-                if st.button("➡️ Lanjut ke Evaluasi"):
-                    st.session_state.menu = "Evaluasi"
-                    st.rerun()
+            if st.button("➡️ Lanjut ke Evaluasi"):
+                st.session_state.menu = "Evaluasi"
+                st.rerun()
 # =========================
 # EVALUASI (SEMUA SKENARIO)
 # =========================
@@ -2233,7 +2168,7 @@ Digunakan sebagai pembanding terhadap hasil sistem.
         "Hitung NDCG Top-K",
         min_value=1,
         max_value=len(alternatif),
-        value=min(5, len(alternatif))
+        value=min(3, len(alternatif))
     )
 
     # =========================
@@ -2242,7 +2177,7 @@ Digunakan sebagai pembanding terhadap hasil sistem.
     st.header("🔍 Detail Perhitungan (Skenario 1)")
 
     skenario1 = skenario_list[0]
-    df_rank = pd.DataFrame(skenario1["ranking"])
+    df_rank = pd.DataFrame(skenario1["ranking"]).copy()
 
     df_merge = df_rank.merge(df_pakar, on="Alternatif", how="inner")
 
@@ -2262,10 +2197,23 @@ Digunakan sebagai pembanding terhadap hasil sistem.
     # =========================
     st.subheader("4️⃣ Spearman Rank Correlation")
 
-    n = len(df_detail)
-    sum_d2 = df_detail["d^2"].sum()
+    # 🔥 pastikan hanya data yang sama
+    df_detail = df_merge.copy()
 
-    rho = 1 - (6 * sum_d2) / (n * (n**2 - 1))
+    # 🔥 hitung d dan d^2
+    df_detail["d"] = df_detail["Ranking"] - df_detail["Rank Pakar"]
+    df_detail["d^2"] = df_detail["d"]**2
+
+    st.dataframe(df_detail[["Alternatif","Ranking","Rank Pakar","d","d^2"]])
+
+    # 🔥 gunakan jumlah data yang valid saja
+    n = len(df_detail)
+
+    if n > 1:
+        sum_d2 = df_detail["d^2"].sum()
+        rho = 1 - (6 * sum_d2) / (n * (n**2 - 1))
+    else:
+        rho = 0
 
     st.write(f"ρ = {rho:.4f}")
 
@@ -2274,7 +2222,11 @@ Digunakan sebagai pembanding terhadap hasil sistem.
     # =========================
     st.subheader("5️⃣ Perhitungan NDCG")
 
-    df_ndcg = df_merge.sort_values("Preferensi", ascending=False).head(k).reset_index(drop=True)
+    # 🔥 gunakan seluruh data dulu (baru top-k)
+    df_ndcg = df_merge.sort_values("Preferensi", ascending=False).reset_index(drop=True)
+
+    # 🔥 ambil top-k
+    df_ndcg = df_ndcg.head(k).copy()
 
     df_ndcg["Posisi"] = df_ndcg.index + 1
     df_ndcg["Rel"] = 1 / df_ndcg["Rank Pakar"]
@@ -2285,7 +2237,11 @@ Digunakan sebagai pembanding terhadap hasil sistem.
 
     dcg = df_ndcg["DCG_i"].sum()
 
+    # =========================
+    # IDCG
+    # =========================
     df_idcg = df_ndcg.sort_values("Rel", ascending=False).reset_index(drop=True)
+
     df_idcg["Posisi"] = df_idcg.index + 1
     df_idcg["Log"] = np.log2(df_idcg["Posisi"] + 1)
     df_idcg["IDCG_i"] = df_idcg["Rel"] / df_idcg["Log"]
@@ -2307,25 +2263,37 @@ Digunakan sebagai pembanding terhadap hasil sistem.
 
     for s in skenario_list:
 
-        df_rank = pd.DataFrame(s["ranking"])
+        df_rank = pd.DataFrame(s["ranking"]).copy()
+
+        # 🔥 pastikan konsisten
+        df_rank = df_rank.reset_index(drop=True)
+
         df_merge = df_rank.merge(df_pakar, on="Alternatif", how="inner")
 
-        rank_model = df_merge["Ranking"]
-        rank_pakar = df_merge["Rank Pakar"]
+        # =========================
+        # SPEARMAN (FIX)
+        # =========================
+        df_merge["d"] = df_merge["Ranking"] - df_merge["Rank Pakar"]
+        df_merge["d2"] = df_merge["d"]**2
 
-        # Spearman
-        sp = 1 - (6 * ((rank_model - rank_pakar)**2).sum()) / (
-            len(rank_model)*(len(rank_model)**2 -1)
-        )
+        n = len(df_merge)
 
-        # NDCG TOP-K
-        df_eval = df_merge.sort_values("Preferensi", ascending=False).head(k)
+        if n > 1:
+            sp = 1 - (6 * df_merge["d2"].sum()) / (n * (n**2 - 1))
+        else:
+            sp = 0
+
+        # =========================
+        # NDCG (FIX)
+        # =========================
+        df_eval = df_merge.sort_values("Preferensi", ascending=False).reset_index(drop=True)
+        df_eval = df_eval.head(k).copy()
 
         df_eval["rel"] = 1 / df_eval["Rank Pakar"]
 
         dcg = (df_eval["rel"] / np.log2(np.arange(2, len(df_eval)+2))).sum()
 
-        df_ideal = df_eval.sort_values("rel", ascending=False)
+        df_ideal = df_eval.sort_values("rel", ascending=False).reset_index(drop=True)
 
         idcg = (df_ideal["rel"] / np.log2(np.arange(2, len(df_ideal)+2))).sum()
 
@@ -2349,10 +2317,10 @@ Digunakan sebagai pembanding terhadap hasil sistem.
     terbaik = df_hasil.sort_values(by="Spearman", ascending=False).iloc[0]
 
     st.success(f"""
-Skenario Terbaik: {terbaik['Skenario']}
-Metode: {terbaik['Metode']}
-Spearman: {terbaik['Spearman']}
-""")
+    Skenario Terbaik: {terbaik['Skenario']}
+    Metode: {terbaik['Metode']}
+    Spearman: {terbaik['Spearman']}
+    """)
 
     # =========================
     # 🔥 METODE PALING STABIL
@@ -2378,9 +2346,9 @@ Spearman: {terbaik['Spearman']}
     terbaik_stabil = df_stabil.sort_values(by="Std Spearman").iloc[0]
 
     st.success(f"""
-📌 Metode Paling Stabil: {terbaik_stabil['Metode']}
+    📌 Metode Paling Stabil: {terbaik_stabil['Metode']}
 
-Alasan:
-- Variasi Spearman paling kecil (Std = {terbaik_stabil['Std Spearman']:.4f})
-- Hasil ranking paling konsisten antar skenario
-""")
+    Alasan:
+    - Variasi Spearman paling kecil (Std = {terbaik_stabil['Std Spearman']:.4f})
+    - Hasil ranking paling konsisten antar skenario
+    """)
