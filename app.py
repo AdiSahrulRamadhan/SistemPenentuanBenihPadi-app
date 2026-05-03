@@ -200,6 +200,12 @@ Mendukung CSV & Excel dan auto separator.
                 st.stop()
 
             # =========================
+            # CEK FILE SAMA / TIDAK
+            # =========================
+            last_file = load_db("filename")
+            is_new_file = file.name != last_file
+
+            # =========================
             # LOAD FILE
             # =========================
             try:
@@ -243,27 +249,48 @@ Mendukung CSV & Excel dan auto separator.
             st.session_state.data = df
 
             # =========================
-            # RESET DATA TURUNAN
+            # RESET HANYA JIKA FILE BARU
             # =========================
-            save_db("preprocess", None)
-            save_db("config", None)
-            save_db("bobot", None)
-            save_db("skenario", None)
+            if is_new_file:
 
-            st.session_state.pop("data_preprocessed", None)
-            st.session_state.pop("skenario_list", None)
-            st.session_state.pop("data_edit", None)
+                # reset DB turunan
+                save_db("preprocess", None)
+                save_db("config", None)
+                save_db("bobot", None)
+                save_db("skenario", None)
+
+                # 🔥 reset semua session terkait
+                keys_to_reset = [
+                    "data_preprocessed",
+                    "skenario_list",
+                    "data_edit",
+                    "kriteria",
+                    "alternatif",
+                    "sub_config",
+                    "mapping_kriteria",
+                    "ahp_matrix",
+                    "bobot_ahp",
+                    "bobot_fuzzy"
+                ]
+
+                for k in keys_to_reset:
+                    st.session_state.pop(k, None)
 
             # =========================
             # NOTIFIKASI SUKSES
             # =========================
             notif = st.empty()
-            notif.success("✅ Upload berhasil! Data siap diproses.")
+            if is_new_file:
+                notif.success("✅ Upload berhasil! Data baru siap diproses.")
+            else:
+                notif.info("ℹ️ File sama diupload kembali, data tidak direset.")
+
             time.sleep(4)
             notif.empty()
 
         except Exception as e:
             st.error(f"❌ Terjadi kesalahan saat upload: {e}")
+
 
     # =========================
     # TAMPILKAN DATA
@@ -512,10 +539,13 @@ Mengurangi noise dan fokus hanya pada kriteria penting.
 Kolom seperti ID, Nama, atau Timestamp biasanya tidak digunakan sebagai kriteria.
 """)
 
+        default_drop = st.session_state.get("drop_cols", [])
+        default_drop = [c for c in default_drop if c in df.columns]
+
         drop_cols = st.multiselect(
-            "Hapus kolom:",
+            "Pilih kolom yang dihapus",
             df.columns,
-            default=st.session_state.get("drop_cols", [])
+            default=default_drop
         )
 
         df_clean = df.drop(columns=drop_cols)
@@ -538,10 +568,13 @@ Menentukan faktor yang mempengaruhi keputusan.
 Produktivitas, Harga, Ketahanan, dll.
 """)
 
+        default_kriteria = st.session_state.get("kriteria", [])
+        default_kriteria = [k for k in default_kriteria if k in df_clean.columns]
+
         kriteria = st.multiselect(
             "Pilih kriteria:",
             df_clean.columns,
-            default=st.session_state.get("kriteria", [])
+            default=default_kriteria
         )
 
         mapping_kriteria = {f"C{i+1}": kriteria[i] for i in range(len(kriteria))}
@@ -2157,12 +2190,6 @@ Digunakan sebagai pembanding terhadap hasil sistem.
 **Aturan:**
 - Tidak boleh ada ranking yang sama
 - Harus berisi angka 1 sampai N
-
-**Contoh:**
-Jika ada 3 alternatif:
-A1 = 1  
-A2 = 2  
-A3 = 3
 """)
 
     df = st.session_state.get("data_preprocessed")
@@ -2192,38 +2219,35 @@ A3 = 3
 
     st.success("✅ Ranking pakar valid")
 
+    # simpan
+    st.session_state.rank_pakar = df_pakar.copy()
+
+    # =========================
+    # INPUT TOP-K NDCG
+    # =========================
+    st.subheader("2️⃣ Pengaturan NDCG")
+
+    k = st.number_input(
+        "Hitung NDCG Top-K",
+        min_value=1,
+        max_value=len(alternatif),
+        value=min(5, len(alternatif))
+    )
+
     # =========================
     # DETAIL SKENARIO 1
     # =========================
     st.header("🔍 Detail Perhitungan (Skenario 1)")
 
-    st.markdown("""
-**Penjelasan:**
-Ditampilkan perhitungan manual untuk memahami proses evaluasi.
-
-Metode yang digunakan:
-- Spearman Rank Correlation
-- NDCG
-""")
-
     skenario1 = skenario_list[0]
     df_rank = pd.DataFrame(skenario1["ranking"])
 
-    df_merge = df_rank.merge(df_pakar, on="Alternatif")
+    df_merge = df_rank.merge(df_pakar, on="Alternatif", how="inner")
 
     # =========================
-    # 1️⃣ TABEL PERBANDINGAN
+    # TABEL PERBANDINGAN
     # =========================
-    st.subheader("2️⃣ Tabel Perbandingan Ranking")
-
-    st.markdown("""
-**Penjelasan:**
-Membandingkan ranking sistem dan ranking pakar.
-
-**Rumus:**
-d = ranking_sistem - ranking_pakar  
-d² = selisih kuadrat
-""")
+    st.subheader("3️⃣ Tabel Perbandingan Ranking")
 
     df_detail = df_merge[["Alternatif", "Ranking", "Rank Pakar"]].copy()
     df_detail["d"] = df_detail["Ranking"] - df_detail["Rank Pakar"]
@@ -2232,82 +2256,45 @@ d² = selisih kuadrat
     st.dataframe(df_detail)
 
     # =========================
-    # 2️⃣ SPEARMAN
+    # SPEARMAN
     # =========================
-    st.subheader("3️⃣ Perhitungan Spearman Rank Correlation")
-
-    st.latex(r"\rho = 1 - \frac{6 \sum d_i^2}{n(n^2 - 1)}")
-
-    st.markdown("""
-**Penjelasan:**
-Mengukur tingkat kesesuaian antara ranking sistem dan pakar.
-
-**Interpretasi:**
-- ρ = 1 → sangat sesuai  
-- ρ = 0 → tidak berkorelasi  
-- ρ = -1 → berlawanan
-""")
+    st.subheader("4️⃣ Spearman Rank Correlation")
 
     n = len(df_detail)
     sum_d2 = df_detail["d^2"].sum()
-
-    st.write(f"Jumlah alternatif (n) = {n}")
-    st.write(f"Σ d² = {sum_d2}")
 
     rho = 1 - (6 * sum_d2) / (n * (n**2 - 1))
 
     st.write(f"ρ = {rho:.4f}")
 
     # =========================
-    # 3️⃣ NDCG
+    # NDCG
     # =========================
-    st.subheader("4️⃣ Perhitungan NDCG")
+    st.subheader("5️⃣ Perhitungan NDCG")
 
-    st.latex(r"NDCG = \frac{DCG}{IDCG}")
-
-    st.markdown("""
-**Penjelasan:**
-NDCG mengukur kualitas ranking berdasarkan posisi.
-
-**Konsep:**
-- Ranking atas lebih penting
-- Semakin mendekati 1 → semakin baik
-""")
-
-    df_ndcg = df_merge.copy()
-    df_ndcg = df_ndcg.sort_values("Preferensi", ascending=False).reset_index(drop=True)
+    df_ndcg = df_merge.sort_values("Preferensi", ascending=False).head(k).reset_index(drop=True)
 
     df_ndcg["Posisi"] = df_ndcg.index + 1
     df_ndcg["Rel"] = 1 / df_ndcg["Rank Pakar"]
     df_ndcg["Log"] = np.log2(df_ndcg["Posisi"] + 1)
     df_ndcg["DCG_i"] = df_ndcg["Rel"] / df_ndcg["Log"]
 
-    st.write("Tabel DCG")
     st.dataframe(df_ndcg[["Alternatif","Posisi","Rel","Log","DCG_i"]])
 
     dcg = df_ndcg["DCG_i"].sum()
 
-    # IDCG
     df_idcg = df_ndcg.sort_values("Rel", ascending=False).reset_index(drop=True)
     df_idcg["Posisi"] = df_idcg.index + 1
     df_idcg["Log"] = np.log2(df_idcg["Posisi"] + 1)
     df_idcg["IDCG_i"] = df_idcg["Rel"] / df_idcg["Log"]
 
-    st.write("Tabel IDCG")
     st.dataframe(df_idcg[["Alternatif","Rel","Posisi","Log","IDCG_i"]])
 
     idcg = df_idcg["IDCG_i"].sum()
 
     ndcg_val = dcg / idcg if idcg != 0 else 0
 
-    # =========================
-    # HASIL
-    # =========================
-    st.subheader("5️⃣ Hasil Akhir Evaluasi")
-
-    st.write(f"DCG = {dcg:.4f}")
-    st.write(f"IDCG = {idcg:.4f}")
-    st.write(f"NDCG = {ndcg_val:.4f}")
+    st.write(f"NDCG@{k} = {ndcg_val:.4f}")
 
     # =========================
     # SEMUA SKENARIO
@@ -2319,21 +2306,25 @@ NDCG mengukur kualitas ranking berdasarkan posisi.
     for s in skenario_list:
 
         df_rank = pd.DataFrame(s["ranking"])
-        df_merge = df_rank.merge(df_pakar, on="Alternatif")
+        df_merge = df_rank.merge(df_pakar, on="Alternatif", how="inner")
 
         rank_model = df_merge["Ranking"]
         rank_pakar = df_merge["Rank Pakar"]
 
         # Spearman
-        sp = 1 - (6 * ((rank_model - rank_pakar)**2).sum()) / (len(rank_model)*(len(rank_model)**2 -1))
+        sp = 1 - (6 * ((rank_model - rank_pakar)**2).sum()) / (
+            len(rank_model)*(len(rank_model)**2 -1)
+        )
 
-        # NDCG
-        df_eval = df_merge.sort_values("Preferensi", ascending=False).head(len(alternatif))
+        # NDCG TOP-K
+        df_eval = df_merge.sort_values("Preferensi", ascending=False).head(k)
+
         df_eval["rel"] = 1 / df_eval["Rank Pakar"]
 
         dcg = (df_eval["rel"] / np.log2(np.arange(2, len(df_eval)+2))).sum()
 
         df_ideal = df_eval.sort_values("rel", ascending=False)
+
         idcg = (df_ideal["rel"] / np.log2(np.arange(2, len(df_ideal)+2))).sum()
 
         nd = dcg / idcg if idcg != 0 else 0
@@ -2342,20 +2333,52 @@ NDCG mengukur kualitas ranking berdasarkan posisi.
             "Skenario": s["nama"],
             "Metode": s["metode"],
             "Spearman": round(sp,4),
-            "NDCG": round(nd,4)
+            f"NDCG@{k}": round(nd,4)
         })
 
     df_hasil = pd.DataFrame(hasil)
-    st.dataframe(df_hasil)
+    st.dataframe(df_hasil, use_container_width=True)
 
     # =========================
     # TERBAIK
     # =========================
+    st.subheader("🏆 Skenario Terbaik")
+
     terbaik = df_hasil.sort_values(by="Spearman", ascending=False).iloc[0]
 
     st.success(f"""
-🏆 Skenario Terbaik: {terbaik['Skenario']}
+Skenario Terbaik: {terbaik['Skenario']}
 Metode: {terbaik['Metode']}
 Spearman: {terbaik['Spearman']}
-NDCG: {terbaik['NDCG']}
+""")
+
+    # =========================
+    # 🔥 METODE PALING STABIL
+    # =========================
+    st.subheader("📊 Analisis Stabilitas Metode")
+
+    df_stabil = df_hasil.groupby("Metode").agg({
+        "Spearman": ["mean", "std"],
+        f"NDCG@{k}": ["mean", "std"]
+    }).reset_index()
+
+    df_stabil.columns = [
+        "Metode",
+        "Mean Spearman",
+        "Std Spearman",
+        f"Mean NDCG@{k}",
+        f"Std NDCG@{k}"
+    ]
+
+    st.dataframe(df_stabil, use_container_width=True)
+
+    # 🔥 METODE PALING STABIL = STD TERKECIL
+    terbaik_stabil = df_stabil.sort_values(by="Std Spearman").iloc[0]
+
+    st.success(f"""
+📌 Metode Paling Stabil: {terbaik_stabil['Metode']}
+
+Alasan:
+- Variasi Spearman paling kecil (Std = {terbaik_stabil['Std Spearman']:.4f})
+- Hasil ranking paling konsisten antar skenario
 """)
